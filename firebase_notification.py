@@ -17,12 +17,32 @@ try:
     env_path = os.path.join(os.getcwd(), '.env')
     if os.path.exists(env_path):
         load_dotenv(env_path, override=True)
+        logger.info(f"Loaded .env file from: {env_path}")
     else:
         env_path = os.path.join(os.path.dirname(os.getcwd()), '.env')
         if os.path.exists(env_path):
             load_dotenv(env_path, override=True)
+            logger.info(f"Loaded .env file from: {env_path}")
         else:
-            logger.error("Could not find .env file in current or parent directory")
+            # Check if required environment variables are available despite no .env file
+            required_vars = [
+                "FIREBASE_TYPE",
+                "FIREBASE_PROJECT_ID",
+                "FIREBASE_PRIVATE_KEY_ID",
+                "FIREBASE_PRIVATE_KEY",
+                "FIREBASE_CLIENT_EMAIL",
+                "FIREBASE_CLIENT_ID",
+                "FIREBASE_AUTH_URI",
+                "FIREBASE_TOKEN_URI",
+                "FIREBASE_AUTH_PROVIDER_X509_CERT_URL",
+                "FIREBASE_CLIENT_X509_CERT_URL"
+            ]
+            missing_vars = [var for var in required_vars if not os.getenv(var)]
+            if missing_vars:
+                logger.warning(f"Could not find .env file in current or parent directory")
+                logger.warning(f"Missing required environment variables: {', '.join(missing_vars)}")
+            else:
+                logger.info("No .env file found, but all required environment variables are available")
 except Exception as e:
     logger.error(f"Error loading .env file: {str(e)}")
 
