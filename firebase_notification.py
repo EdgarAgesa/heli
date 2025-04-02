@@ -4,32 +4,74 @@ from flask import current_app
 import uuid
 import os
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
-# Initialize Firebase
+def get_required_env_var(var_name):
+    """Get a required environment variable or raise an error"""
+    value = os.getenv(var_name)
+    if not value:
+        error_msg = f"Missing required environment variable: {var_name}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    return value
+
 def initialize_firebase(app):
+    """Initialize Firebase with credentials from environment variables"""
     try:
-        # Create credentials from environment variables
-        cred = credentials.Certificate({
-            "type": os.getenv("FIREBASE_TYPE"),
-            "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-            "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-            "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
-            "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-            "client_id": os.getenv("FIREBASE_CLIENT_ID"),
-            "auth_uri": os.getenv("FIREBASE_AUTH_URI"),
-            "token_uri": os.getenv("FIREBASE_TOKEN_URI"),
-            "auth_provider_x509_cert_url": os.getenv("FIREBASE_AUTH_PROVIDER_X509_CERT_URL"),
-            "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL")
-        })
+        # Log which environment variables are missing
+        required_vars = [
+            "FIREBASE_TYPE",
+            "FIREBASE_PROJECT_ID",
+            "FIREBASE_PRIVATE_KEY_ID",
+            "FIREBASE_PRIVATE_KEY",
+            "FIREBASE_CLIENT_EMAIL",
+            "FIREBASE_CLIENT_ID",
+            "FIREBASE_AUTH_URI",
+            "FIREBASE_TOKEN_URI",
+            "FIREBASE_AUTH_PROVIDER_X509_CERT_URL",
+            "FIREBASE_CLIENT_X509_CERT_URL"
+        ]
+        
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            error_msg = f"Missing Firebase environment variables: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Get all required environment variables
+        firebase_config = {
+            "type": get_required_env_var("FIREBASE_TYPE"),
+            "project_id": get_required_env_var("FIREBASE_PROJECT_ID"),
+            "private_key_id": get_required_env_var("FIREBASE_PRIVATE_KEY_ID"),
+            "private_key": get_required_env_var("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
+            "client_email": get_required_env_var("FIREBASE_CLIENT_EMAIL"),
+            "client_id": get_required_env_var("FIREBASE_CLIENT_ID"),
+            "auth_uri": get_required_env_var("FIREBASE_AUTH_URI"),
+            "token_uri": get_required_env_var("FIREBASE_TOKEN_URI"),
+            "auth_provider_x509_cert_url": get_required_env_var("FIREBASE_AUTH_PROVIDER_X509_CERT_URL"),
+            "client_x509_cert_url": get_required_env_var("FIREBASE_CLIENT_X509_CERT_URL")
+        }
         
         # Initialize with the credentials
+        cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
-        app.logger.info("✅ Firebase initialized successfully")
+        logger.info("✅ Firebase initialized successfully")
+        
+    except ValueError as e:
+        error_msg = f"Firebase configuration error: {str(e)}"
+        logger.error(error_msg)
+        logger.error("Please ensure all Firebase environment variables are set in your deployment environment.")
+        raise
     except Exception as e:
-        app.logger.error(f"🔥 Error initializing Firebase: {str(e)}")
+        error_msg = f"Error initializing Firebase: {str(e)}"
+        logger.error(error_msg)
         raise
 
 def generate_fcm_token():
