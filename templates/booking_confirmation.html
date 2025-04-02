@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #2c3e50;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f6fa;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+        .header h2 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 30px;
+        }
+        .greeting {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        .booking-details {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .booking-details p {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .booking-details strong {
+            color: #34495e;
+        }
+        .amount {
+            font-size: 20px;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #7f8c8d;
+            font-size: 12px;
+            border-top: 1px solid #eee;
+        }
+        .company-info {
+            margin-top: 20px;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+        .divider {
+            height: 1px;
+            background-color: #eee;
+            margin: 20px 0;
+        }
+        .booking-id {
+            background-color: #e8f5e9;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 25px;
+            font-size: 14px;
+            color: #27ae60;
+            text-align: center;
+        }
+        .important-note {
+            background-color: #fff3e0;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            color: #e65100;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Booking Confirmation</h2>
+        </div>
+        
+        <div class="content">
+            <div class="greeting">
+                Dear {{ client.name }},
+            </div>
+            
+            <p>Your booking has been confirmed. Here are the details:</p>
+            
+            <div class="booking-id">
+                Booking #{{ booking.id }}
+            </div>
+            
+            <div class="booking-details">
+                <p>
+                    <strong>Date:</strong>
+                    <span>{{ booking.date }}</span>
+                </p>
+                <p>
+                    <strong>Time:</strong>
+                    <span>{{ booking.time }}</span>
+                </p>
+                <p>
+                    <strong>Purpose:</strong>
+                    <span>{{ booking.purpose }}</span>
+                </p>
+                <p>
+                    <strong>Number of Passengers:</strong>
+                    <span>{{ booking.num_passengers }}</span>
+                </p>
+                <p>
+                    <strong>Amount:</strong>
+                    <span class="amount">${{ booking.final_amount }}</span>
+                </p>
+            </div>
+            
+            <div class="important-note">
+                Please arrive at least 30 minutes before your scheduled departure time.
+                Don't forget to bring a valid ID for all passengers.
+            </div>
+            
+            <div class="divider"></div>
+            
+            <p>Thank you for choosing our service. If you have any questions, please don't hesitate to contact us.</p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated message, please do not reply to this email.</p>
+            <p>Sent on: {{ date }}</p>
+        </div>
+        
+        <div class="company-info">
+            <p>DejAir Helicopter Services</p>
+            <p>Your trusted partner in air travel</p>
+        </div>
+    </div>
+</body>
+</html>

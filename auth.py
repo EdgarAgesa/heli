@@ -5,6 +5,7 @@ from flask_restful import Api, Resource, reqparse
 from models import Client, db
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import decode_token
+from firebase_notification import generate_fcm_token
 
 auth_bp = Blueprint('auth_bp', __name__, url_prefix='/auth')
 auth_api = Api(auth_bp)
@@ -12,8 +13,9 @@ bcrypt = Bcrypt()
 
 jwt = JWTManager()
 
-ACCESS_EXPIRES = timedelta(hours=360) 
-REFRESH_EXPIRES = timedelta(days=7) 
+# Extended token expiration times
+ACCESS_EXPIRES = timedelta(days=30)  # Access token now lasts 30 days
+REFRESH_EXPIRES = timedelta(days=90)  # Refresh token now lasts 90 days
 
 
 
@@ -41,17 +43,25 @@ class Signup(Resource):
         
         hashed_password = bcrypt.generate_password_hash(data["password"]).decode('utf-8')
         
+        # Generate FCM token automatically
+        fcm_token = generate_fcm_token()
+        
         new_user = Client(
             name=data["name"],
             email=data["email"],
             phone_number=data["phone_number"],
-            password=hashed_password
+            password=hashed_password,
+            fcm_token=fcm_token
         )
         
         db.session.add(new_user)
         db.session.commit()
         
-        return {"message": "Signup successful"}, 201
+        return {
+            "message": "Signup successful",
+            "client_id": new_user.id,
+            "fcm_token": fcm_token
+        }, 201
 
 login_args = reqparse.RequestParser()
 login_args.add_argument('email', type=str, required=True, help='Email is required')
@@ -66,6 +76,11 @@ class Login(Resource):
         if not user or not bcrypt.check_password_hash(user.password, data["password"]):
             return {"message": "Invalid email or password"}, 401
         
+        # Generate new FCM token if user doesn't have one
+        if not user.fcm_token:
+            user.fcm_token = generate_fcm_token()
+            db.session.commit()
+        
         access_token = create_access_token(identity=str(user.id))
         refresh_token = create_refresh_token(identity=str(user.id))
 
@@ -75,14 +90,19 @@ class Login(Resource):
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "client_id": user.id
+            "client_id": user.id,
+            "fcm_token": user.fcm_token,
+            "name": user.name,
+            "email": user.email
         }, 200
 
     @jwt_required()
     def get(self):
         return {
             "client_id": current_user.id,
-            "email": current_user.email
+            "email": current_user.email,
+            "name": current_user.name,
+            "fcm_token": current_user.fcm_token
         }, 200
 
 auth_api.add_resource(Signup, '/signup')

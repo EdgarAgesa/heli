@@ -17,15 +17,13 @@ class BaseModel(db.Model, SerializerMixin):
         return f"{self.__class__.__name__} (id={self.id})"
 
     def to_dict(self):
-        # Convert all columns to a dictionary
         result = {}
         for column in self.__table__.columns:
             value = getattr(self, column.name)
-            # Handle time and date objects
             if isinstance(value, time):
-                result[column.name] = value.isoformat()  # Convert time to string
+                result[column.name] = value.isoformat()
             elif isinstance(value, date):
-                result[column.name] = value.isoformat()  # Convert date to string
+                result[column.name] = value.isoformat()
             else:
                 result[column.name] = value
         return result
@@ -34,11 +32,10 @@ class Client(BaseModel):
     __tablename__ = "clients"
 
     name = db.Column(db.String(60), nullable=False)
-    phone_number = db.Column(db.String(14), unique=True, nullable=False)  
+    phone_number = db.Column(db.String(14), unique=True, nullable=False)
     email = db.Column(db.String(90), unique=True, nullable=True)
-    password = db.Column(db.String(128), nullable=False)  
-
-    # Cascade deletes for bookings when a client is deleted
+    password = db.Column(db.String(128), nullable=False)
+    fcm_token = db.Column(db.String(255))  # Firebase Cloud Messaging token
     bookings = db.relationship('Booking', backref='client', lazy=True, cascade="all, delete-orphan")
 
     def set_password(self, password):
@@ -51,10 +48,11 @@ class Admin(BaseModel):
     __tablename__ = "admins"
 
     name = db.Column(db.String(60), nullable=False)
-    phone_number = db.Column(db.String(14), unique=True, nullable=False)  
+    phone_number = db.Column(db.String(14), unique=True, nullable=False)
     email = db.Column(db.String(90), unique=True, nullable=True)
-    password = db.Column(db.String(128), nullable=False) 
+    password = db.Column(db.String(128), nullable=False)
     is_superadmin = db.Column(db.Boolean, default=False)
+    fcm_token = db.Column(db.String(255))  # Firebase Cloud Messaging token
 
     def set_password(self, password):
         self.password = generate_password_hash(password)
@@ -67,9 +65,7 @@ class Helicopter(BaseModel):
 
     model = db.Column(db.String, unique=True, nullable=False)
     capacity = db.Column(db.Integer, nullable=False)
-    image_url = db.Column(db.String)  
-
-    # Cascade deletes for bookings when a helicopter is deleted
+    image_url = db.Column(db.String)
     bookings = db.relationship('Booking', backref='helicopter', lazy=True, cascade="all, delete-orphan")
 
     def as_dict(self):
@@ -78,19 +74,17 @@ class Helicopter(BaseModel):
             'model': self.model,
             'capacity': self.capacity,
             'image_url': self.image_url,
-            'bookings': [booking.to_dict() for booking in self.bookings]  # Convert Booking objects to dictionaries
-        }  
+            'bookings': [booking.to_dict() for booking in self.bookings]
+        }
 
 class Payment(BaseModel):
     __tablename__ = "payments"
 
     amount = db.Column(db.Integer, nullable=False)
-    phone_number = db.Column(db.String(14), nullable=False)  # Phone number used for payment
-    merchant_request_id = db.Column(db.String(50), nullable=False)  # M-Pesa MerchantRequestID
-    checkout_request_id = db.Column(db.String(50), nullable=False)  # M-Pesa CheckoutRequestID
-    payment_status = db.Column(db.String, default="pending")  # Payment status (pending, confirmed, failed)
-
-    # Cascade deletes for bookings when a payment is deleted
+    phone_number = db.Column(db.String(14), nullable=False)
+    merchant_request_id = db.Column(db.String(50), nullable=False)
+    checkout_request_id = db.Column(db.String(50), nullable=False)
+    payment_status = db.Column(db.String, default="pending")
     bookings = db.relationship('Booking', backref='payment', lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
@@ -111,42 +105,53 @@ class Booking(BaseModel):
     time = db.Column(db.Time, nullable=False)
     date = db.Column(db.Date, nullable=False)
     purpose = db.Column(db.String, nullable=False)
-    status = db.Column(db.String, default="pending") 
-    final_amount = db.Column(db.Integer, nullable=True)  
-    negotiation_status = db.Column(db.String, default="none")  
-
-    helicopter_id = db.Column(db.Integer, db.ForeignKey('helicopters.id', ondelete="CASCADE"), nullable=False) 
-    client_id = db.Column(db.Integer, db.ForeignKey('clients.id', ondelete="CASCADE"), nullable=False) 
+    status = db.Column(db.String, default="pending")
+    original_amount = db.Column(db.Integer)  # Initial price
+    final_amount = db.Column(db.Integer)  # Negotiated price
+    negotiation_status = db.Column(db.String, default="none")  # none, requested, counter_offer, accepted, rejected
+    num_passengers = db.Column(db.Integer, nullable=False)  # Number of passengers
+    helicopter_id = db.Column(db.Integer, db.ForeignKey('helicopters.id', ondelete="CASCADE"), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey('clients.id', ondelete="CASCADE"), nullable=False)
     payment_id = db.Column(db.Integer, db.ForeignKey('payments.id', ondelete="CASCADE"), nullable=True)
 
     def as_dict(self):
         return {
             'id': self.id,
-            'time': self.time.isoformat(),  # Convert time to string
-            'date': self.date.isoformat(),  # Convert date to string
+            'time': self.time.isoformat(),
+            'date': self.date.isoformat(),
             'purpose': self.purpose,
             'status': self.status,
-            'helicopter': self.helicopter.as_dict(),  # Convert Helicopter object to dictionary
-            'client': self.client.to_dict(),  # Convert Client object to dictionary
+            'original_amount': self.original_amount,
             'final_amount': self.final_amount,
             'negotiation_status': self.negotiation_status,
+            'num_passengers': self.num_passengers,
+            'helicopter': self.helicopter.as_dict(),
+            'client': self.client.to_dict(),
+            'payment': self.payment.to_dict() if self.payment else None,
             'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'payment_id': self.payment_id,
-            'payment': self.payment.to_dict() if self.payment else None  # Convert Payment object to dictionary
+            'updated_at': self.updated_at.isoformat()
         }
 
-class Receipt(BaseModel):
-    __tablename__ = "receipts"
+class NegotiationHistory(BaseModel):
+    __tablename__ = "negotiation_history"
 
-    receipt_number = db.Column(db.String, nullable=False)  
-    payment_id = db.Column(db.Integer, db.ForeignKey('payments.id', ondelete="CASCADE"), nullable=False)
+    booking_id = db.Column(db.Integer, db.ForeignKey('bookings.id'), nullable=False)
+    user_id = db.Column(db.Integer, nullable=False)  # ID of user who made the change
+    user_type = db.Column(db.String, nullable=False)  # 'client' or 'admin'
+    old_amount = db.Column(db.Integer)
+    new_amount = db.Column(db.Integer)
+    action = db.Column(db.String, nullable=False)  # 'request', 'counter', 'accept', 'reject'
+    notes = db.Column(db.String)
 
     def to_dict(self):
         return {
             'id': self.id,
-            'receipt_number': self.receipt_number,
-            'payment_id': self.payment_id,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat()
+            'booking_id': self.booking_id,
+            'user_id': self.user_id,
+            'user_type': self.user_type,
+            'old_amount': self.old_amount,
+            'new_amount': self.new_amount,
+            'action': self.action,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat()
         }

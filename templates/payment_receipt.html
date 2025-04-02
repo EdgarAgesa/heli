@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #2c3e50;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f6fa;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+        .header h2 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 30px;
+        }
+        .greeting {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        .receipt-number {
+            background-color: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 25px;
+            font-size: 14px;
+            color: #7f8c8d;
+        }
+        .payment-details {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .payment-details p {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .payment-details strong {
+            color: #34495e;
+        }
+        .amount {
+            font-size: 20px;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #7f8c8d;
+            font-size: 12px;
+            border-top: 1px solid #eee;
+        }
+        .company-info {
+            margin-top: 20px;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 500;
+            background-color: #e8f5e9;
+            color: #27ae60;
+        }
+        .divider {
+            height: 1px;
+            background-color: #eee;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Payment Receipt</h2>
+        </div>
+        
+        <div class="content">
+            <div class="greeting">
+                Dear {{ client.name }},
+            </div>
+            
+            <p>Thank you for your payment. Here are the transaction details:</p>
+            
+            <div class="receipt-number">
+                Receipt #{{ payment.id }}
+            </div>
+            
+            <div class="payment-details">
+                <p>
+                    <strong>Booking ID:</strong>
+                    <span>#{{ booking.id }}</span>
+                </p>
+                <p>
+                    <strong>Amount Paid:</strong>
+                    <span class="amount">${{ payment.amount }}</span>
+                </p>
+                <p>
+                    <strong>Payment Status:</strong>
+                    <span class="status-badge">{{ payment.payment_status }}</span>
+                </p>
+                <p>
+                    <strong>Transaction Date:</strong>
+                    <span>{{ date }}</span>
+                </p>
+                <p>
+                    <strong>Phone Number:</strong>
+                    <span>{{ payment.phone_number }}</span>
+                </p>
+            </div>
+            
+            <div class="divider"></div>
+            
+            <p>Your booking has been confirmed. If you have any questions, please don't hesitate to contact us.</p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated message, please do not reply to this email.</p>
+            <p>Sent on: {{ date }}</p>
+        </div>
+        
+        <div class="company-info">
+            <p>DejAir Helicopter Services</p>
+            <p>Your trusted partner in air travel</p>
+        </div>
+    </div>
+</body>
+</html> 
