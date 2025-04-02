@@ -21,7 +21,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False  
 app.config["JSON_COMPACT"] = True
 app.config["JWT_SECRET_KEY"] = "Helicopter stuff"
-app.config['FIREBASE_CREDENTIALS_PATH'] = 'firebase.json'  # Relative path
 
 # Email Configuration
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
