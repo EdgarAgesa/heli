@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Flag to track Firebase initialization
+firebase_initialized = False
+
 def get_required_env_var(var_name):
     """Get a required environment variable or raise an error"""
     value = os.getenv(var_name)
@@ -24,6 +27,8 @@ def get_required_env_var(var_name):
 
 def initialize_firebase(app):
     """Initialize Firebase with credentials from environment variables"""
+    global firebase_initialized
+    
     try:
         # Log which environment variables are missing
         required_vars = [
@@ -41,9 +46,9 @@ def initialize_firebase(app):
         
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
-            error_msg = f"Missing Firebase environment variables: {', '.join(missing_vars)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            logger.warning(f"Firebase not initialized: Missing environment variables: {', '.join(missing_vars)}")
+            logger.warning("Firebase notifications will be disabled")
+            return
 
         # Get all required environment variables
         firebase_config = {
@@ -62,65 +67,75 @@ def initialize_firebase(app):
         # Initialize with the credentials
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred)
+        firebase_initialized = True
         logger.info("✅ Firebase initialized successfully")
         
-    except ValueError as e:
-        error_msg = f"Firebase configuration error: {str(e)}"
-        logger.error(error_msg)
-        logger.error("Please ensure all Firebase environment variables are set in your deployment environment.")
-        raise
     except Exception as e:
-        error_msg = f"Error initializing Firebase: {str(e)}"
-        logger.error(error_msg)
-        raise
+        logger.warning(f"Firebase not initialized: {str(e)}")
+        logger.warning("Firebase notifications will be disabled")
 
 def generate_fcm_token():
     """Generate a unique FCM token"""
     return str(uuid.uuid4())
 
 def send_notification_to_user(user_fcm_token, title, body, data=None):
-    if not user_fcm_token:
-        current_app.logger.warning("No FCM token provided for user notification")
+    """Send notification to a specific user"""
+    if not firebase_initialized:
+        logger.warning("Firebase not initialized. Notification not sent.")
         return False
 
-    message = messaging.Message(
-        notification=messaging.Notification(
-            title=title,
-            body=body,
-        ),
-        token=user_fcm_token,
-        data=data or {}
-    )
+    if not user_fcm_token:
+        logger.warning("No FCM token provided for user notification")
+        return False
+
     try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            token=user_fcm_token,
+            data=data or {}
+        )
         response = messaging.send(message)
-        current_app.logger.info(f"Notification sent to user: {response}")
+        logger.info(f"Notification sent to user: {response}")
         return True
     except Exception as e:
-        current_app.logger.error(f"Error sending user notification: {str(e)}")
+        logger.error(f"Error sending user notification: {str(e)}")
         return False
 
 def send_notification_to_topic(topic, title, body, data=None):
-    message = messaging.Message(
-        notification=messaging.Notification(
-            title=title,
-            body=body,
-        ),
-        topic=topic,
-        data=data or {}
-    )
+    """Send notification to a topic"""
+    if not firebase_initialized:
+        logger.warning("Firebase not initialized. Topic notification not sent.")
+        return False
+
     try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            topic=topic,
+            data=data or {}
+        )
         response = messaging.send(message)
-        current_app.logger.info(f"Notification sent to topic {topic}: {response}")
+        logger.info(f"Notification sent to topic {topic}: {response}")
         return True
     except Exception as e:
-        current_app.logger.error(f"Error sending topic notification: {str(e)}")
+        logger.error(f"Error sending topic notification: {str(e)}")
         return False
 
 def subscribe_to_topic(tokens, topic):
+    """Subscribe tokens to a topic"""
+    if not firebase_initialized:
+        logger.warning("Firebase not initialized. Topic subscription not performed.")
+        return None
+
     try:
         response = messaging.subscribe_to_topic(tokens, topic)
-        current_app.logger.info(f"Subscribed to topic {topic}: {response.success_count} successes")
+        logger.info(f"Subscribed to topic {topic}: {response.success_count} successes")
         return response
     except Exception as e:
-        current_app.logger.error(f"Error subscribing to topic: {str(e)}")
+        logger.error(f"Error subscribing to topic: {str(e)}")
         return None
