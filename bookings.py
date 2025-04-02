@@ -194,23 +194,39 @@ class BookingsResource(Resource):
             return {'message': 'Invalid phone number format'}, 400
             
         try:
+            # Ensure booking is attached to session
+            db.session.add(booking)
+            
             # Initiate payment
             payment = initiate_payment(booking, phone_number)
             if not payment:
                 return {'message': 'Failed to initiate payment'}, 500
                 
+            # Ensure payment is attached to session
+            db.session.add(payment)
+            db.session.flush()  # Flush to get payment.id
+            
             # Confirm payment
             payment_status = confirm_payment(payment.id)
             if payment_status != 'success':
                 return {'message': f'Payment failed: {payment_status}'}, 400
                 
+            # Refresh payment instance to get fresh data
+            db.session.refresh(payment)
+            
             # Update payment status
             payment.payment_status = payment_status
-            db.session.commit()
             
             # Update booking status
             booking.status = 'paid'
+            booking.payment_id = payment.id  # Link payment to booking
+            
+            # Commit all changes
             db.session.commit()
+            
+            # Refresh both objects to ensure we have fresh data
+            db.session.refresh(payment)
+            db.session.refresh(booking)
             
             # Send booking confirmation email
             client = Client.query.get(booking.client_id)
