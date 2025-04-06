@@ -99,6 +99,27 @@ class Payment(BaseModel):
             'updated_at': self.updated_at.isoformat()
         }
 
+class ChatMessage(BaseModel):
+    __tablename__ = "chat_messages"
+
+    booking_id = db.Column(db.Integer, db.ForeignKey('bookings.id'), nullable=False)
+    sender_id = db.Column(db.Integer, nullable=False)  # ID of user who sent the message
+    sender_type = db.Column(db.String, nullable=False)  # 'client' or 'admin'
+    message = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, default=False)
+    booking = db.relationship('Booking', backref='chat_messages', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'booking_id': self.booking_id,
+            'sender_id': self.sender_id,
+            'sender_type': self.sender_type,
+            'message': self.message,
+            'is_read': self.is_read,
+            'created_at': self.created_at.isoformat()
+        }
+
 class Booking(BaseModel):
     __tablename__ = "bookings"
 
@@ -113,6 +134,8 @@ class Booking(BaseModel):
     helicopter_id = db.Column(db.Integer, db.ForeignKey('helicopters.id', ondelete="CASCADE"), nullable=False)
     client_id = db.Column(db.Integer, db.ForeignKey('clients.id', ondelete="CASCADE"), nullable=False)
     payment_id = db.Column(db.Integer, db.ForeignKey('payments.id', ondelete="CASCADE"), nullable=True)
+    has_unread_messages = db.Column(db.Boolean, default=False)  # Track unread messages
+    last_message_at = db.Column(db.DateTime)  # Track last message timestamp
 
     def as_dict(self):
         return {
@@ -128,6 +151,8 @@ class Booking(BaseModel):
             'helicopter': self.helicopter.as_dict(),
             'client': self.client.to_dict(),
             'payment': self.payment.to_dict() if self.payment else None,
+            'has_unread_messages': self.has_unread_messages,
+            'last_message_at': self.last_message_at.isoformat() if self.last_message_at else None,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }

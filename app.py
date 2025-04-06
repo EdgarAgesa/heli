@@ -55,6 +55,8 @@ from helicopter import HelicopterResource
 from payments import PaymentsResource
 from auth import auth_bp
 from admin import admin_auth_bp
+from chat import ChatResource, NegotiationChatsResource
+from admin_bookings import AdminBookingManagementResource
 
 # Register blueprints
 app.register_blueprint(auth_bp)
@@ -70,6 +72,13 @@ api.add_resource(PaymentsResource, '/payments')
 api.add_resource(NegotiatedPaymentResource, '/booking/<int:booking_id>/pay-negotiated')
 api.add_resource(FCMTokenResource, '/fcm-token')
 api.add_resource(NegotiationHistoryResource, '/booking/<int:booking_id>/negotiation-history')
+
+# Chat routes
+api.add_resource(ChatResource, '/booking/<int:booking_id>/chat')
+api.add_resource(NegotiationChatsResource, '/negotiation-chats')
+
+# Admin booking management routes
+api.add_resource(AdminBookingManagementResource, '/admin/bookings/<string:booking_type>')
 
 # Make mail instance available globally
 app.mail = mail
