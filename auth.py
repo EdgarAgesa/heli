@@ -17,12 +17,21 @@ jwt = JWTManager()
 ACCESS_EXPIRES = timedelta(days=30)  # Access token now lasts 30 days
 REFRESH_EXPIRES = timedelta(days=90)  # Refresh token now lasts 90 days
 
-
-
 @jwt.user_lookup_loader
 def user_lookup_callback(_jwt_header, jwt_data):
     identity = jwt_data["sub"]
-    return Client.query.filter_by(id=identity).first()
+    try:
+        # Convert identity to integer if it's a string
+        user_id = int(identity) if isinstance(identity, str) else identity
+        return Client.query.get(user_id)
+    except (ValueError, TypeError):
+        return None
+
+@jwt.user_identity_loader
+def user_identity_callback(user):
+    if user:
+        return str(user.id)
+    return None
 
 register_args = reqparse.RequestParser()
 register_args.add_argument('name', type=str, required=True, help='Name is required')

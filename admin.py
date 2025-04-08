@@ -16,8 +16,18 @@ bcrypt = Bcrypt()
 @jwt.user_lookup_loader
 def admin_lookup_callback(_jwt_header, jwt_data):
     identity = jwt_data["sub"]
-    admin = Admin.query.get(int(identity))
-    return admin
+    try:
+        # Convert identity to integer if it's a string
+        admin_id = int(identity) if isinstance(identity, str) else identity
+        return Admin.query.get(admin_id)
+    except (ValueError, TypeError):
+        return None
+
+@jwt.user_identity_loader
+def admin_identity_callback(admin):
+    if admin:
+        return str(admin.id)
+    return None
 
 admin_login_args = reqparse.RequestParser()
 admin_login_args.add_argument('email', type=str, required=True, help='Email is required')
@@ -48,7 +58,8 @@ class AdminLogin(Resource):
             "access_token": access_token,
             "admin_id": admin.id,
             "is_superadmin": admin.is_superadmin,
-            "fcm_token": admin.fcm_token
+            "fcm_token": admin.fcm_token,
+            "name": admin.name
         }, 200
 
 class AdminSignup(Resource):

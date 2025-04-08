@@ -13,8 +13,15 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Enable CORS for all routes
-CORS(app)
+# Enable CORS for all routes with proper configuration
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:8080", "http://127.0.0.1:8080"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
+    }
+})
 
 # Configurations
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.db'
@@ -55,7 +62,7 @@ from helicopter import HelicopterResource
 from payments import PaymentsResource
 from auth import auth_bp
 from admin import admin_auth_bp
-from chat import ChatResource, NegotiationChatsResource
+from chat import ChatResource, NegotiationChatsResource, UnreadChatsResource, ChatReadResource
 from admin_bookings import AdminBookingManagementResource
 
 # Register blueprints
@@ -75,7 +82,9 @@ api.add_resource(NegotiationHistoryResource, '/booking/<int:booking_id>/negotiat
 
 # Chat routes
 api.add_resource(ChatResource, '/booking/<int:booking_id>/chat')
+api.add_resource(ChatReadResource, '/booking/<int:booking_id>/chat/read')
 api.add_resource(NegotiationChatsResource, '/negotiation-chats')
+api.add_resource(UnreadChatsResource, '/chat/unread')
 
 # Admin booking management routes
 api.add_resource(AdminBookingManagementResource, '/admin/bookings/<string:booking_type>')
