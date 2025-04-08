@@ -16,7 +16,11 @@ app = Flask(__name__)
 # Enable CORS for all routes with proper configuration
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:8080", "http://127.0.0.1:8080"],
+        "origins": [
+            "http://localhost:8080", 
+            "http://127.0.0.1:8080",
+            "https://dej-air.netlify.app"
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
