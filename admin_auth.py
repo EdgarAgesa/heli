@@ -1,11 +1,19 @@
-from flask_restful import Resource, reqparse
-from flask_jwt_extended import create_access_token, create_refresh_token
+from flask_restful import Resource, reqparse, Api
+from flask import Blueprint
+from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_sqlalchemy import SQLAlchemy
 from models import Admin
+from extensions import db, logger
 from firebase_notification import generate_fcm_token
+from datetime import timedelta
 
-db = SQLAlchemy()
+# Extended token expiration times
+ACCESS_EXPIRES = timedelta(days=30)
+REFRESH_EXPIRES = timedelta(days=90)
+
+# Create blueprint
+admin_auth_bp = Blueprint('admin_auth_bp', __name__, url_prefix='/admin')
+admin_auth_api = Api(admin_auth_bp)
 
 class AdminSignup(Resource):
     def post(self):
@@ -24,7 +32,8 @@ class AdminSignup(Resource):
         if Admin.query.filter_by(email=data['email']).first():
             return {"message": "Email already exists"}, 400
         
-        hashed_password = generate_password_hash(data["password"]).decode('utf-8')
+        # Hash the password using pbkdf2:sha256
+        hashed_password = generate_password_hash(data["password"], method='pbkdf2:sha256')
         
         # Generate FCM token automatically
         fcm_token = generate_fcm_token()
@@ -63,12 +72,50 @@ class AdminLogin(Resource):
             admin.fcm_token = generate_fcm_token()
             db.session.commit()
         
-        access_token = create_access_token(identity=str(admin.id))
-        refresh_token = create_refresh_token(identity=str(admin.id))
-
+        # Create tokens with proper claims
+        access_token = create_access_token(
+            identity=str(admin.id),
+            expires_delta=ACCESS_EXPIRES,
+            additional_claims={
+                'role': 'admin',
+                'email': admin.email
+            }
+        )
+        refresh_token = create_refresh_token(
+            identity=str(admin.id),
+            expires_delta=REFRESH_EXPIRES
+        )
+        
+        logger.info(f"Created admin tokens for user {admin.id}")
+        
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "admin_id": admin.id,
             "fcm_token": admin.fcm_token
-        }, 200 
+        }, 200
+
+class AdminLogout(Resource):
+    @jwt_required()
+    def post(self):
+        try:
+            user_id = get_jwt_identity()
+            admin = Admin.query.get(user_id)
+            
+            if admin:
+                admin.fcm_token = None
+                db.session.commit()
+                logger.info(f"Admin {user_id} logged out successfully")
+                return {"message": "Successfully logged out"}, 200
+            
+            logger.error(f"Admin not found for ID: {user_id}")
+            return {"message": "Admin not found"}, 404
+            
+        except Exception as e:
+            logger.error(f"Error during admin logout: {str(e)}")
+            return {"message": "Error during logout"}, 422
+
+# Add resources
+admin_auth_api.add_resource(AdminSignup, '/signup')
+admin_auth_api.add_resource(AdminLogin, '/login')
+admin_auth_api.add_resource(AdminLogout, '/logout')

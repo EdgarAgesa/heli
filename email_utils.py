@@ -1,9 +1,11 @@
 from flask import current_app, render_template
 from flask_mail import Message
 from datetime import datetime
+from extensions import mail  # <-- Add this import
 
 def send_payment_receipt_email(booking, payment, client):
     """Send payment receipt email to client"""
+    print("send_payment_receipt_email called")
     try:
         with current_app.app_context():
             msg = Message(
@@ -11,7 +13,7 @@ def send_payment_receipt_email(booking, payment, client):
                 recipients=[client.email],
                 sender=current_app.config['MAIL_DEFAULT_SENDER']
             )
-            
+            # Use your HTML template for a styled, detailed email
             msg.html = render_template(
                 'payment_receipt.html',
                 booking=booking,
@@ -19,13 +21,13 @@ def send_payment_receipt_email(booking, payment, client):
                 client=client,
                 date=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             )
-            
-            # Use current_app.mail instead of importing mail
-            current_app.mail.send(msg)
+            mail.send(msg)
             current_app.logger.info(f"Payment receipt email sent to {client.email}")
+            print(f"Payment receipt email sent to {client.email}")
             return True
     except Exception as e:
         current_app.logger.error(f"Failed to send payment receipt email: {str(e)}")
+        print(f"Failed to send payment receipt email: {str(e)}")
         return False
 
 def send_booking_confirmation_email(booking, client):
@@ -46,7 +48,7 @@ def send_booking_confirmation_email(booking, client):
             )
             
             # Use current_app.mail instead of importing mail
-            current_app.mail.send(msg)
+            mail.send(msg)
             current_app.logger.info(f"Booking confirmation email sent to {client.email}")
             return True
     except Exception as e:

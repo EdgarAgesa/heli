@@ -132,8 +132,13 @@ def format_private_key(private_key):
 def initialize_firebase(app):
     """Initialize Firebase with credentials from environment variables"""
     global firebase_initialized
-    
     try:
+        # Check if already initialized
+        if firebase_initialized:
+            logger.info("Firebase already initialized")
+            return
+            
+        # List of required environment variables
         required_vars = [
             "FIREBASE_TYPE",
             "FIREBASE_PROJECT_ID",
@@ -190,6 +195,8 @@ def generate_fcm_token():
 
 def send_notification_to_user(user_fcm_token, title, body, data=None):
     """Send notification to a specific user"""
+    logger.info(f"Attempting to send notification - Title: {title}, Body: {body}, Data: {data}")
+    
     if not firebase_initialized:
         logger.warning("Firebase not initialized. Notification not sent.")
         return False
@@ -199,15 +206,23 @@ def send_notification_to_user(user_fcm_token, title, body, data=None):
         return False
 
     try:
+        # Ensure data is a dictionary of strings
+        if data:
+            data = {str(k): str(v) for k, v in data.items()}
+        else:
+            data = {}
+            
+        logger.info(f"Sending FCM message to token: {user_fcm_token}")
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
                 body=body,
             ),
             token=user_fcm_token,
-            data=data or {}
+            data=data
         )
-        messaging.send(message)
+        response = messaging.send(message)
+        logger.info(f"Successfully sent message: {response}")
         return True
     except Exception as e:
         logger.error(f"Error sending user notification: {str(e)}")

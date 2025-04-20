@@ -2,17 +2,23 @@ from flask_restful import Resource
 from flask import request, jsonify, current_app
 from datetime import datetime
 from models import db, Booking, Payment, Client, Admin, NegotiationHistory
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request, get_jwt
 from mpesa import format_phone_number, initiate_mpesa_payment, wait_for_payment_confirmation
 from firebase_notification import send_notification_to_user, send_notification_to_topic
 from email_utils import send_payment_receipt_email, send_booking_confirmation_email
 import re
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
-def is_admin(user_id):
-    return Admin.query.filter_by(id=user_id).first() is not None
+def is_admin(user):
+    """Check if a user is an admin"""
+    if isinstance(user, Admin):
+        return True
+    elif isinstance(user, (int, str)):
+        return Admin.query.filter_by(id=user).first() is not None
+    return False
 
 def notify_admin(message):
     """Send notification to all admins"""
@@ -23,16 +29,21 @@ def notify_admin(message):
     )
 
 def initiate_payment(booking, phone_number):
-    """Initiate payment process"""
+    """Initiate payment process with improved error handling"""
     try:
-        payment_result = initiate_mpesa_payment(booking.final_amount, phone_number)
+        formatted_phone = format_phone_number(phone_number)
+        logger.info(f"Initiating payment of {booking.final_amount} for booking {booking.id} to {formatted_phone}")
+        
+        payment_result = initiate_mpesa_payment(booking.final_amount, formatted_phone)
         
         if payment_result.get('ResponseCode') != '0':
-            raise Exception(payment_result.get('ResponseDescription', 'Payment initiation failed'))
+            error_msg = payment_result.get('ResponseDescription', 'Payment initiation failed')
+            logger.error(f"Payment initiation failed: {error_msg}")
+            raise Exception(error_msg)
             
         payment = Payment(
             amount=booking.final_amount,
-            phone_number=phone_number,
+            phone_number=formatted_phone,
             merchant_request_id=payment_result['MerchantRequestID'],
             checkout_request_id=payment_result['CheckoutRequestID'],
             payment_status='pending'
@@ -43,65 +54,106 @@ def initiate_payment(booking, phone_number):
         return payment
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Payment initiation error: {str(e)}")
         raise Exception(f"Payment initiation failed: {str(e)}")
 
-def confirm_payment(payment_id):
-    """Confirm payment status"""
-    try:
-        payment = Payment.query.get(payment_id)
-        if not payment:
-            raise Exception('Payment not found')
+def confirm_payment(checkout_request_id, max_attempts=24, delay=5):
+    """Confirm payment status with improved waiting logic"""
+    logger.info(f"Confirming payment for checkout request: {checkout_request_id}")
+    
+    for attempt in range(max_attempts):
+        try:
+            logger.info(f"Payment verification attempt {attempt + 1}/{max_attempts}")
+            result = wait_for_payment_confirmation(checkout_request_id)
             
-        payment_verification = wait_for_payment_confirmation(payment.checkout_request_id)
-        
-        if payment_verification['status'] == 'success':
-            return 'success'
-        elif payment_verification['status'] == 'failed':
-            return f"Payment failed: {payment_verification.get('details', {}).get('ResultDesc', 'Unknown error')}"
-        elif payment_verification['status'] == 'error':
-            return f"Payment error: {payment_verification.get('details', 'Unknown error')}"
-        else:
-            return f"Payment status: {payment_verification.get('status', 'unknown')}"
-    except Exception as e:
-        return f"Payment confirmation error: {str(e)}"
+            if result.get('status') == 'success':
+                logger.info("Payment confirmed successfully")
+                return {
+                    'status': 'success',
+                    'details': 'Payment confirmed',
+                    'response': result
+                }
+            elif result.get('status') == 'pending':
+                logger.info(f"Payment still processing, waiting {delay} seconds")
+                time.sleep(delay)
+                continue
+            elif result.get('status') == 'failed':
+                logger.warning(f"Payment failed: {result.get('details')}")
+                return {
+                    'status': 'failed',
+                    'details': result.get('details'),
+                    'response': result
+                }
+            else:
+                logger.error(f"Unexpected payment status: {result.get('status')}")
+                if attempt < max_attempts - 1:
+                    time.sleep(delay)
+                    continue
+                else:
+                    return {
+                        'status': 'error',
+                        'details': 'Maximum attempts reached without confirmation'
+                    }
+        except Exception as e:
+            logger.error(f"Error verifying payment: {str(e)}")
+            if attempt < max_attempts - 1:
+                time.sleep(delay)
+                continue
+            else:
+                return {
+                    'status': 'error',
+                    'details': str(e)
+                }
+    
+    return {
+        'status': 'failed',
+        'details': 'Payment verification timed out'
+    }
 
 class BookingsResource(Resource):
     @jwt_required()
     def get(self, id=None):
-        current_user_id = get_jwt_identity()
-        
-        if id is None:
-            if is_admin(current_user_id):
-                bookings = Booking.query.all()
-            else:
-                bookings = Booking.query.filter_by(client_id=current_user_id).all()
-            return jsonify([booking.as_dict() for booking in bookings])
-        
-        booking = Booking.query.get_or_404(id)
-        if not is_admin(current_user_id) and booking.client_id != current_user_id:
-            return {"error": "Unauthorized"}, 403
+        try:
+            # Log request headers for debugging
+            auth_header = request.headers.get('Authorization')
+            logger.info(f"Auth header: {auth_header}")
             
-        return jsonify(booking.as_dict())
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+            logger.info(f"User ID from token: {user_id}")
+            
+            if id is None:
+                # Check if user is admin
+                admin = Admin.query.get(user_id)
+                if admin:
+                    logger.info(f"Admin user {user_id} fetching all bookings")
+                    bookings = Booking.query.all()
+                else:
+                    logger.info(f"Client {user_id} fetching their bookings")
+                    bookings = Booking.query.filter_by(client_id=user_id).all()
+                return jsonify([booking.as_dict() for booking in bookings])
+            
+            booking = Booking.query.get_or_404(id)
+            admin = Admin.query.get(user_id)
+            if not admin and booking.client_id != user_id:
+                return {"error": "Unauthorized"}, 403
+            
+            return jsonify(booking.as_dict())
+        except Exception as e:
+            logger.error(f"Error getting booking: {str(e)}")
+            return {"error": str(e)}, 500
 
     @jwt_required()
     def post(self):
         current_user_id = get_jwt_identity()
         data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['helicopter_id', 'date', 'time', 'purpose', 'num_passengers']
+        required_fields = ['helicopter_id', 'date', 'time', 'purpose', 'num_passengers', 'original_amount']
         for field in required_fields:
             if field not in data:
                 return {'message': f'{field} is required'}, 400
-                
         try:
-            # Convert time string to time object
             time_obj = datetime.strptime(data['time'], '%H:%M:%S').time()
-            
-            # Convert date string to date object
             date_obj = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            
-            # Create booking
             booking = Booking(
                 client_id=current_user_id,
                 helicopter_id=data['helicopter_id'],
@@ -109,24 +161,18 @@ class BookingsResource(Resource):
                 time=time_obj,
                 purpose=data['purpose'],
                 num_passengers=data['num_passengers'],
-                original_amount=data.get('amount', 0),
-                final_amount=data.get('amount', 0),
-                status='pending'
+                original_amount=data['original_amount'],
+                final_amount=data['original_amount'],
+                status='pending',
+                negotiation_status='none'
             )
-            
             db.session.add(booking)
             db.session.commit()
-            
-            # Notify admin of new booking
             notify_admin(f"New booking #{booking.id} created")
-            
             return {
                 'message': 'Booking created successfully. Please proceed with payment or negotiation.',
                 'booking': booking.to_dict()
             }, 201
-            
-        except ValueError as e:
-            return {'message': f'Invalid date or time format: {str(e)}'}, 400
         except Exception as e:
             db.session.rollback()
             return {'message': f'Failed to create booking: {str(e)}'}, 500
@@ -135,45 +181,215 @@ class BookingsResource(Resource):
     def put(self, id):
         current_user_id = get_jwt_identity()
         booking = Booking.query.get_or_404(id)
-        
-        # Authorization check
         if not is_admin(current_user_id) and booking.client_id != current_user_id:
             return {"error": "Unauthorized"}, 403
-            
         data = request.get_json()
-        
-        # Handle direct payment
+
+        # Payment
         if "payment" in data and data["payment"]:
             return self._handle_direct_payment(booking, data)
-        
-        # Admin-specific negotiation handling
-        if is_admin(current_user_id):
-            if "negotiation_action" in data:
-                return self._handle_admin_negotiation_action(booking, data, current_user_id)
-        
-        # Client-specific negotiation handling
-        elif "negotiation_request" in data:
+
+        # Admin negotiation
+        if is_admin(current_user_id) and "negotiation_action" in data:
+            return self._handle_admin_negotiation_action(booking, data, current_user_id)
+
+        # Client negotiation request
+        if "negotiation_request" in data:
             return self._handle_client_negotiation_request(booking, data, current_user_id)
-            
-        # Handle counter offer from client
-        elif "counter_offer" in data:
+
+        # Client counter offer
+        if "counter_offer" in data:
             return self._handle_client_counter_offer(booking, data, current_user_id)
-            
-        # Regular booking updates
+
+        # Regular update
         return self._handle_regular_update(booking, data)
 
     def _handle_direct_payment(self, booking, data):
-        """Handle direct payment for a booking"""
         try:
-            # Validate phone number format
-            if not data['phone_number'] or len(data['phone_number']) < 9:
-                return {'message': 'Invalid phone number format. Please provide a valid phone number.'}, 400
-                
-            # Get the booking
-            booking = Booking.query.get(booking.id)
-            if not booking:
-                return {'message': 'Booking not found'}, 404
-                
+            if not data.get('phone_number'):
+                return {'message': 'Phone number is required'}, 400
+            if booking.status == 'paid':
+                return {'message': 'Booking is already paid'}, 400
+            if booking.status == 'cancelled':
+                return {'message': 'Cannot process payment for a cancelled booking'}, 400
+            if booking.status not in ['pending_payment', 'pending']:
+                return {'message': 'Booking is not in a payable state'}, 400
+
+            formatted_phone = format_phone_number(data['phone_number'])
+            mpesa_response = initiate_mpesa_payment(booking.final_amount, formatted_phone)
+            checkout_request_id = mpesa_response.get('CheckoutRequestID')
+            if not checkout_request_id:
+                return {'message': 'Payment initiation failed: No checkout request ID received'}, 500
+
+            # Create Payment record
+            payment = Payment(
+                amount=booking.final_amount,
+                phone_number=formatted_phone,
+                merchant_request_id=mpesa_response.get('MerchantRequestID'),
+                checkout_request_id=checkout_request_id,
+                payment_status='pending'
+            )
+            db.session.add(payment)
+            db.session.commit()
+
+            # Link payment to booking
+            booking.payment_id = payment.id
+            booking.payment_status = 'pending'
+            db.session.commit()
+
+            # Now confirm payment using the real CheckoutRequestID
+            payment_status = confirm_payment(checkout_request_id)
+            if payment_status['status'] == 'success':
+                payment.payment_status = 'success'
+                booking.status = 'paid'
+                db.session.commit()
+                logger.info("About to send payment receipt email...")
+                client = Client.query.get(booking.client_id)
+                logger.info(f"Client email: {getattr(client, 'email', None)}")
+                send_payment_receipt_email(booking, payment, client)
+                return {'message': 'Payment successful', 'booking': booking.to_dict()}, 200
+            else:
+                payment.payment_status = 'failed'
+                db.session.commit()
+                return {'message': f'Payment failed: {payment_status}', 'booking': booking.to_dict()}, 400
+        except Exception as e:
+            db.session.rollback()
+            return {'message': f'Payment failed: {str(e)}'}, 500
+
+    def _handle_admin_negotiation_action(self, booking, data, admin_id):
+        try:
+            required_fields = ['negotiation_action', 'final_amount', 'notes']
+            if not all(field in data for field in required_fields):
+                return {'message': 'Missing required fields'}, 400
+
+            negotiation = NegotiationHistory(
+                booking_id=booking.id,
+                action=data['negotiation_action'],
+                new_amount=data['final_amount'],
+                notes=data['notes'],
+                user_id=admin_id,
+                user_type='admin'
+            )
+            db.session.add(negotiation)
+
+            if data['negotiation_action'] == 'accept':
+                booking.status = 'pending_payment'
+                booking.negotiation_status = 'accepted'
+                booking.final_amount = data['final_amount']
+            elif data['negotiation_action'] == 'reject':
+                booking.status = 'cancelled'
+                booking.negotiation_status = 'rejected'
+            elif data['negotiation_action'] == 'counter':
+                booking.status = 'negotiation'
+                booking.negotiation_status = 'counter_offer'
+                booking.final_amount = data['final_amount']
+            else:
+                return {'message': 'Invalid negotiation action'}, 400
+
+            db.session.commit()
+            # ...notify client...
+            return {'message': 'Negotiation action processed successfully', 'booking': booking.to_dict()}, 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error handling negotiation action: {str(e)}")
+            return {'message': str(e)}, 500
+
+    def _handle_client_counter_offer(self, booking, data, client_id):
+        try:
+            required_fields = ['negotiated_amount', 'notes']
+            if not all(field in data for field in required_fields):
+                return {'message': 'Missing required fields'}, 400
+
+            negotiation = NegotiationHistory(
+                booking_id=booking.id,
+                action='counter',
+                new_amount=data['negotiated_amount'],
+                notes=data['notes'],
+                user_id=client_id,
+                user_type='client'
+            )
+            db.session.add(negotiation)
+
+            booking.status = 'negotiation'
+            booking.negotiation_status = 'counter_offer'
+            booking.final_amount = data['negotiated_amount']
+
+            db.session.commit()
+            # ...notify admin...
+            return {'message': 'Counter offer submitted successfully', 'booking': booking.to_dict()}, 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error handling client counter offer: {str(e)}")
+            return {'message': str(e)}, 500
+
+    def _handle_client_negotiation_request(self, booking, data, client_id):
+        try:
+            required_fields = ['negotiated_amount', 'notes']
+            if not all(field in data for field in required_fields):
+                return {'message': 'Missing required fields'}, 400
+
+            negotiation = NegotiationHistory(
+                booking_id=booking.id,
+                action='request',
+                new_amount=data['negotiated_amount'],
+                notes=data['notes'],
+                user_id=client_id,
+                user_type='client'
+            )
+            db.session.add(negotiation)
+
+            booking.status = 'negotiation'
+            booking.negotiation_status = 'requested'
+            booking.final_amount = data['negotiated_amount']
+
+            db.session.commit()
+            # ...notify admin...
+            return {'message': 'Negotiation request submitted successfully', 'booking': booking.to_dict()}, 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error handling client negotiation request: {str(e)}")
+            return {'message': str(e)}, 500
+
+    def _handle_regular_update(self, booking, data):
+        """Handle regular booking updates"""
+        try:
+            # Update booking fields
+            for key, value in data.items():
+                if hasattr(booking, key):
+                    setattr(booking, key, value)
+            
+            db.session.commit()
+            return {'message': 'Booking updated successfully', 'booking': booking.to_dict()}, 200
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error updating booking: {str(e)}")
+            return {'message': str(e)}, 500
+
+class PaymentResource(Resource):
+    @jwt_required()
+    def post(self):
+        try:
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+            
+            data = request.get_json()
+            
+            # Validate required fields
+            required_fields = ['booking_id', 'phone_number']
+            if not all(field in data for field in required_fields):
+                return {"error": "Missing required fields"}, 400
+            
+            booking_id = data['booking_id']
+            phone_number = data['phone_number']
+            
+            # Get booking
+            booking = Booking.query.get_or_404(booking_id)
+            
+            # Check if user is authorized
+            if not is_admin(user_id) and booking.client_id != user_id:
+                return {"error": "Unauthorized"}, 403
+            
             # Check if booking is already paid
             if booking.status == 'paid':
                 return {'message': 'Booking is already paid'}, 400
@@ -191,7 +407,7 @@ class BookingsResource(Resource):
                 return {'message': 'Booking is not in pending payment status'}, 400
                 
             # Format phone number for M-Pesa
-            formatted_phone = format_phone_number(data['phone_number'])
+            formatted_phone = format_phone_number(phone_number)
             
             # Initiate M-Pesa payment
             try:
@@ -254,244 +470,9 @@ class BookingsResource(Resource):
                 return {'message': f'Payment processing error: {str(e)}'}, 500
                 
         except Exception as e:
-            logger.error(f"Unexpected error in _handle_direct_payment: {str(e)}")
+            logger.error(f"Unexpected error in PaymentResource.post: {str(e)}")
             db.session.rollback()
             return {'message': f'Unexpected error: {str(e)}'}, 500
-
-    def _handle_admin_negotiation_action(self, booking, data, admin_id):
-        action = data["negotiation_action"]
-        
-        if action == "accept":
-            if "final_amount" not in data:
-                return {"error": "Missing final_amount for acceptance"}, 400
-                
-            # Record old and new amounts
-            old_amount = booking.final_amount or booking.original_amount
-            new_amount = data["final_amount"]
-            
-            booking.final_amount = new_amount
-            booking.negotiation_status = "accepted"
-            booking.status = "pending_payment"
-            
-            # Record in history
-            history = NegotiationHistory(
-                booking_id=booking.id,
-                user_id=admin_id,
-                user_type="admin",
-                old_amount=old_amount,
-                new_amount=new_amount,
-                action="accept",
-                notes=data.get("notes", "Admin accepted negotiation")
-            )
-            db.session.add(history)
-            db.session.commit()
-            
-            # Notify client
-            client = Client.query.get(booking.client_id)
-            if client and client.fcm_token:
-                send_notification_to_user(
-                    user_fcm_token=client.fcm_token,
-                    title="Negotiation Accepted!",
-                    body=f"Your booking #{booking.id} negotiation was accepted",
-                    data={
-                        "type": "negotiation_update",
-                        "booking_id": str(booking.id),
-                        "status": "accepted",
-                        "final_amount": str(new_amount)
-                    }
-                )
-            
-            return {
-                "message": "Negotiation accepted successfully",
-                "booking": booking.as_dict()
-            }, 200
-            
-        elif action == "reject":
-            booking.negotiation_status = "rejected"
-            booking.status = "cancelled"
-            
-            history = NegotiationHistory(
-                booking_id=booking.id,
-                user_id=admin_id,
-                user_type="admin",
-                old_amount=booking.final_amount or booking.original_amount,
-                new_amount=None,
-                action="reject",
-                notes=data.get("notes", "Admin rejected negotiation")
-            )
-            db.session.add(history)
-            db.session.commit()
-            
-            # Notify client
-            client = Client.query.get(booking.client_id)
-            if client and client.fcm_token:
-                send_notification_to_user(
-                    user_fcm_token=client.fcm_token,
-                    title="Negotiation Rejected",
-                    body=f"Your booking #{booking.id} negotiation was rejected",
-                    data={
-                        "type": "negotiation_update",
-                        "booking_id": str(booking.id),
-                        "status": "rejected"
-                    }
-                )
-            
-            return {
-                "message": "Negotiation rejected",
-                "booking": booking.as_dict()
-            }, 200
-            
-        else:
-            return {"error": "Invalid negotiation action"}, 400
-
-    def _handle_client_counter_offer(self, booking, data, client_id):
-        if booking.negotiation_status not in ["requested", "counter_offer"]:
-            return {"error": "Cannot submit counter offer in current state"}, 400
-            
-        if "counter_offer" not in data:
-            return {"error": "Counter offer amount is required"}, 400
-            
-        counter_offer = data["counter_offer"]
-        old_amount = booking.final_amount or booking.original_amount
-        
-        # Validate counter offer is less than current amount
-        if counter_offer >= old_amount:
-            return {"error": "Counter offer must be less than current amount"}, 400
-        
-        booking.final_amount = counter_offer
-        booking.negotiation_status = "counter_offer"
-        
-        history = NegotiationHistory(
-            booking_id=booking.id,
-            user_id=client_id,
-            user_type="client",
-            old_amount=old_amount,
-            new_amount=counter_offer,
-            action="counter",
-            notes=data.get("notes", "Client counter offer")
-        )
-        db.session.add(history)
-        db.session.commit()
-        
-        # Notify admins
-        send_notification_to_topic(
-            topic="admin_notifications",
-            title="New Counter Offer",
-            body=f"Booking #{booking.id} has a new counter offer: ${counter_offer}",
-            data={
-                "type": "counter_offer",
-                "booking_id": str(booking.id),
-                "amount": str(counter_offer)
-            }
-        )
-        
-        return {
-            "message": "Counter offer submitted successfully",
-            "booking": booking.as_dict()
-        }, 200
-
-    def _handle_client_negotiation_request(self, booking, data, client_id):
-        """Handle initial negotiation request from client"""
-        if booking.negotiation_status != "none":
-            return {"error": "Negotiation already in progress"}, 400
-            
-        if "negotiated_amount" not in data:
-            return {"error": "Negotiated amount is required"}, 400
-            
-        negotiated_amount = data["negotiated_amount"]
-        original_amount = booking.original_amount
-        
-        # Validate negotiated amount is less than original amount
-        if negotiated_amount >= original_amount:
-            return {"error": "Negotiated amount must be less than original amount"}, 400
-        
-        booking.final_amount = negotiated_amount
-        booking.negotiation_status = "requested"
-        booking.status = "negotiation_requested"
-        
-        history = NegotiationHistory(
-            booking_id=booking.id,
-            user_id=client_id,
-            user_type="client",
-            old_amount=original_amount,
-            new_amount=negotiated_amount,
-            action="request",
-            notes=data.get("notes", "Client negotiation request")
-        )
-        db.session.add(history)
-        db.session.commit()
-        
-        # Notify admins
-        send_notification_to_topic(
-            topic="admin_notifications",
-            title="New Negotiation Request",
-            body=f"Booking #{booking.id} has a new negotiation request: ${negotiated_amount}",
-            data={
-                "type": "negotiation_request",
-                "booking_id": str(booking.id),
-                "amount": str(negotiated_amount)
-            }
-        )
-        
-        return {
-            "message": "Negotiation request submitted successfully",
-            "booking": booking.as_dict()
-        }, 200
-
-    def _handle_regular_update(self, booking, data):
-        """Handle regular booking updates"""
-        try:
-            # Handle status updates
-            if 'status' in data:
-                new_status = data['status']
-                
-                # Validate status
-                valid_statuses = ['pending', 'pending_payment', 'paid', 'cancelled', 'expired']
-                if new_status not in valid_statuses:
-                    return {'message': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'}, 400
-                
-                # Special handling for pending_payment status
-                if new_status == 'pending_payment':
-                    # Only allow transition to pending_payment from pending or negotiation_requested
-                    if booking.status not in ['pending', 'negotiation_requested']:
-                        return {'message': f'Cannot change status from {booking.status} to pending_payment'}, 400
-                    
-                    # Set the status
-                    booking.status = new_status
-                    logger.info(f"Booking {booking.id} status updated to pending_payment")
-                else:
-                    # For other statuses, just update
-                    booking.status = new_status
-                    logger.info(f"Booking {booking.id} status updated to {new_status}")
-            
-            # Handle other fields
-            if 'date' in data:
-                try:
-                    booking.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-                except ValueError:
-                    return {'message': 'Invalid date format. Use YYYY-MM-DD'}, 400
-            
-            if 'time' in data:
-                try:
-                    booking.time = datetime.strptime(data['time'], '%H:%M').time()
-                except ValueError:
-                    return {'message': 'Invalid time format. Use HH:MM'}, 400
-            
-            if 'purpose' in data:
-                booking.purpose = data['purpose']
-            
-            if 'num_passengers' in data:
-                booking.num_passengers = data['num_passengers']
-            
-            # Commit changes
-            db.session.commit()
-            
-            return {'message': 'Booking updated successfully', 'booking': booking.to_dict()}, 200
-            
-        except Exception as e:
-            logger.error(f"Error updating booking: {str(e)}")
-            db.session.rollback()
-            return {'message': f'Error updating booking: {str(e)}'}, 500
 
 class NegotiatedPaymentResource(Resource):
     @jwt_required()
@@ -525,10 +506,10 @@ class NegotiatedPaymentResource(Resource):
                 return {'message': 'Failed to initiate payment'}, 500
                 
             # Confirm payment with a timeout
-            payment_status = confirm_payment(payment.id)
+            payment_status = confirm_payment(payment.checkout_request_id)
             
             # Check if payment was successful
-            if payment_status == 'success':
+            if payment_status['status'] == 'success':
                 # Update payment status
                 payment.payment_status = 'success'
                 booking.payment_id = payment.id  # Link payment to booking
@@ -555,7 +536,7 @@ class NegotiatedPaymentResource(Resource):
                 db.session.commit()
                 
                 return {
-                    'message': f'Payment failed: {payment_status}',
+                    'message': f'Payment failed: {payment_status["details"]}',
                     'booking': booking.to_dict(),
                     'payment': payment.to_dict()
                 }, 400
@@ -567,27 +548,85 @@ class NegotiatedPaymentResource(Resource):
 class FCMTokenResource(Resource):
     @jwt_required()
     def post(self):
-        current_user_id = get_jwt_identity()
-        data = request.get_json()
-        
-        if not data or "token" not in data:
-            return {"error": "FCM token is required"}, 400
+        try:
+            current_user_id = get_jwt_identity()
+            logger.info(f"Updating FCM token for user {current_user_id}")
             
-        # Update token for client or admin
-        client = Client.query.filter_by(id=current_user_id).first()
-        if client:
-            # Store only the token string, not the entire notification data
-            client.fcm_token = str(data["token"])
-        else:
-            admin = Admin.query.filter_by(id=current_user_id).first()
-            if admin:
-                # Store only the token string, not the entire notification data
-                admin.fcm_token = str(data["token"])
+            data = request.get_json()
+            if not data or "token" not in data:
+                return {"error": "FCM token is required"}, 400
+            
+            # Convert string ID to int for database query
+            user_id = int(current_user_id)
+            token = str(data["token"])
+            
+            # Update token for client or admin
+            client = Client.query.filter_by(id=user_id).first()
+            if client:
+                # Store token for client
+                client.fcm_token = token
+                logger.info(f"Updated FCM token for client {user_id}: {token}")
             else:
-                return {"error": "User not found"}, 404
-                
-        db.session.commit()
-        return {"message": "FCM token updated successfully"}, 200
+                admin = Admin.query.filter_by(id=user_id).first()
+                if admin:
+                    # Store token for admin
+                    admin.fcm_token = token
+                    logger.info(f"Updated FCM token for admin {user_id}: {token}")
+                    
+                    # Subscribe admin to admin notifications topic
+                    send_notification_to_topic(
+                        topic="admin_notifications",
+                        title="Admin Notifications",
+                        body="You are now subscribed to admin notifications",
+                        data={"type": "admin_subscription"}
+                    )
+                    logger.info(f"Subscribed admin {user_id} to admin notifications topic")
+                else:
+                    logger.error(f"User not found: {user_id}")
+                    return {"error": "User not found"}, 404
+            
+            db.session.commit()
+            return {"message": "FCM token updated successfully"}, 200
+            
+        except Exception as e:
+            logger.error(f"Error updating FCM token: {str(e)}")
+            return {"error": "Error updating FCM token"}, 500
+
+class BookingStatusResource(Resource):
+    @jwt_required()
+    def get(self, booking_id):
+        try:
+            current_user_id = get_jwt_identity()
+            booking = Booking.query.get_or_404(booking_id)
+            
+            # Verify authorization
+            if not is_admin(current_user_id) and booking.client_id != current_user_id:
+                return {"error": "Unauthorized"}, 403
+            
+            # Get associated payment if it exists
+            payment = None
+            if booking.payment_id:
+                payment = Payment.query.get(booking.payment_id)
+            
+            response = {
+                'status': booking.status,
+                'payment_status': payment.payment_status if payment else None,
+                'amount': booking.final_amount,
+                'id': booking.id,
+                'date': booking.date.isoformat() if booking.date else None,
+                'time': booking.time.isoformat() if booking.time else None,
+                'final_amount': booking.final_amount,
+                'original_amount': booking.original_amount,
+                'payment_id': payment.id if payment else None,
+                'merchant_request_id': payment.merchant_request_id if payment else None,
+                'checkout_request_id': payment.checkout_request_id if payment else None
+            }
+            
+            return jsonify(response)
+            
+        except Exception as e:
+            logger.error(f"Error getting booking status: {str(e)}")
+            return {"error": "Error getting booking status"}, 500
 
 class NegotiationHistoryResource(Resource):
     @jwt_required()
@@ -603,3 +642,61 @@ class NegotiationHistoryResource(Resource):
             .order_by(NegotiationHistory.created_at.asc()).all()
             
         return jsonify([item.to_dict() for item in history])
+
+class PaymentConfirmationResource(Resource):
+    @jwt_required()
+    def get(self, checkout_request_id):
+        """Check payment status endpoint"""
+        try:
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+            
+            # Find booking by checkout request ID
+            booking = Booking.query.filter_by(checkout_request_id=checkout_request_id).first()
+            if not booking:
+                return {"error": "Booking not found"}, 404
+                
+            # Check authorization
+            if not is_admin(user_id) and booking.client_id != user_id:
+                return {"error": "Unauthorized"}, 403
+                
+            # Check payment status
+            payment = Payment.query.get(booking.payment_id)
+            checkout_request_id = payment.checkout_request_id  # This is the string from M-Pesa
+            payment_verification = wait_for_payment_confirmation(checkout_request_id)
+            
+            if payment_verification['status'] == 'success':
+                # Update booking status
+                booking.status = 'paid'
+                booking.payment_status = 'completed'
+                # booking.payment_date = datetime.now()  # Uncomment if your model supports this
+                db.session.commit()
+                
+                # Send notifications
+                client = Client.query.get(booking.client_id)
+                if client:
+                    send_payment_receipt_email(booking, booking, client)
+                    send_booking_confirmation_email(booking, client)
+                    notify_admin(f"Payment completed for booking #{booking.id}")
+                
+                return {
+                    'status': 'success',
+                    'message': 'Payment confirmed',
+                    'booking': booking.as_dict()
+                }, 200
+                
+            elif payment_verification['status'] == 'pending':
+                return {
+                    'status': 'pending',
+                    'message': 'Payment still processing'
+                }, 202
+                
+            else:  # failed or error
+                return {
+                    'status': 'failed',
+                    'message': payment_verification.get('details', 'Payment failed')
+                }, 400
+                
+        except Exception as e:
+            logger.error(f"Payment confirmation error: {str(e)}")
+            return {"error": str(e)}, 500

@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-chat_bp = Blueprint('chat_bp', __name__, url_prefix='/chat')
+chat_bp = Blueprint('chat_bp', __name__)
 chat_api = Api(chat_bp)
 
 def is_admin(user_id):
@@ -17,10 +17,13 @@ def is_admin(user_id):
         # Convert user_id to integer if it's a string
         admin_id = int(user_id) if isinstance(user_id, str) else user_id
         
-        # Get the user from the Admin table
-        admin = Admin.query.get(admin_id)
+        # First check if this user exists in the Client table
+        client = Client.query.get(admin_id)
+        if client is not None:
+            return False  # If they're in the Client table, they're not an admin
         
-        # Return True if the user exists in the Admin table
+        # Then check the Admin table
+        admin = Admin.query.get(admin_id)
         return admin is not None
     except (ValueError, TypeError):
         logger.error(f"Invalid user_id format: {user_id}")
@@ -43,14 +46,25 @@ class ChatResource(Resource):
         
         # Determine if the sender is an admin
         sender_type = 'admin' if is_admin(user_id) else 'client'
+        logger.debug(f"Message sender type: {sender_type}, user_id: {user_id}")
         
-        # Get sender name
+        # Get sender name and role
         if sender_type == "admin":
             admin = Admin.query.get(user_id)
+            logger.debug(f"Admin info - ID: {admin.id}, Name: {admin.name}, Is Superadmin: {admin.is_superadmin if admin else False}")
             sender_name = admin.name if admin else "Admin"
+            # Don't include 'Admin' in the name if it's already in the role
+            if sender_name == "Super Admin" or sender_name == "Admin":
+                sender_name = "System"
+            sender_role = "Super Admin" if admin and admin.is_superadmin else "Admin"
+            display_name = f"{sender_role}: {sender_name}"
+            logger.debug(f"Admin display info - Name: {sender_name}, Role: {sender_role}, Display: {display_name}")
         else:
             client = Client.query.get(user_id)
+            logger.debug(f"Client info - ID: {client.id if client else None}, Name: {client.name if client else 'Unknown'}")
             sender_name = client.name if client else "User"
+            display_name = sender_name
+            logger.debug(f"Client display info - Name: {sender_name}, Display: {display_name}")
         
         # Create the chat message
         chat_message = ChatMessage(
@@ -59,8 +73,10 @@ class ChatResource(Resource):
             sender_type=sender_type,
             message=data['message']
         )
+        logger.debug(f"Creating chat message - Booking: {booking_id}, Sender: {user_id}, Type: {sender_type}, Message: {data['message']}")
         db.session.add(chat_message)
         db.session.commit()
+        logger.debug(f"Chat message created with ID: {chat_message.id}")
         
         # Send notifications based on sender type
         if sender_type == 'admin':
@@ -72,13 +88,15 @@ class ChatResource(Resource):
                     'type': 'chat_message',
                     'booking_id': str(booking_id),
                     'sender_type': sender_type,
-                    'sender_name': sender_name,
+                    'sender_name': display_name,
                     'message': data['message'],
-                    'timestamp': datetime.utcnow().isoformat()
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'role': 'user'  # For client view
                 }
+                logger.debug(f"Sending client notification - Data: {notification_data}")
                 send_notification_to_user(
                     client.fcm_token,
-                    f"New message from {sender_name}",
+                    f"New message from {display_name}",
                     data['message'],
                     notification_data
                 )
@@ -89,10 +107,12 @@ class ChatResource(Resource):
                 'type': 'chat_message',
                 'booking_id': str(booking_id),
                 'sender_type': sender_type,
-                'sender_name': sender_name,
+                'sender_name': display_name,
                 'message': data['message'],
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.utcnow().isoformat(),
+                'role': 'admin'  # For admin view
             }
+            logger.debug(f"Sending admin notification - Data: {notification_data}")
             send_notification_to_topic(
                 'admin_notifications',
                 f"New message from {sender_name}",
@@ -132,9 +152,12 @@ class ChatResource(Resource):
             if msg.sender_type == 'admin':
                 sender = Admin.query.get(int(msg.sender_id))
                 sender_name = sender.name if sender else 'Admin'
+                # Include admin role information
+                sender_role = 'Super Admin' if sender and sender.is_superadmin else 'Admin'
             else:
                 sender = Client.query.get(int(msg.sender_id))
                 sender_name = sender.name if sender else 'Client'
+                sender_role = 'Client'
             
             formatted_messages.append({
                 'id': msg.id,
@@ -142,38 +165,50 @@ class ChatResource(Resource):
                 'sender_id': msg.sender_id,
                 'sender_type': msg.sender_type,
                 'sender_name': sender_name,
+                'sender_role': sender_role,
                 'message': msg.message,
                 'created_at': msg.created_at.isoformat()
             })
         
         return {'messages': formatted_messages}, 200
 
-# Register the resource with the booking_id parameter
-chat_api.add_resource(ChatResource, '/<int:booking_id>')
-
 class ChatReadResource(Resource):
     @jwt_required()
     def put(self, booking_id):
         """Mark all messages in a booking as read"""
-        current_user_id = get_jwt_identity()
-        booking = Booking.query.get_or_404(booking_id)
-        
-        # Verify authorization
-        if not is_admin(current_user_id) and booking.client_id != current_user_id:
-            return {"error": "Unauthorized"}, 403
+        try:
+            current_user_id = get_jwt_identity()
+            logger.info(f"Marking messages as read for booking {booking_id} by user {current_user_id}")
             
-        # Mark all unread messages as read
-        ChatMessage.query.filter_by(
-            booking_id=booking_id,
-            is_read=False
-        ).filter(
-            ChatMessage.sender_id != current_user_id
-        ).update({"is_read": True})
-        
-        booking.has_unread_messages = False
-        db.session.commit()
-        
-        return {"message": "Messages marked as read"}, 200
+            booking = Booking.query.get_or_404(booking_id)
+            
+            # Verify authorization
+            if not is_admin(current_user_id) and booking.client_id != int(current_user_id):
+                logger.error(f"Unauthorized access attempt to booking {booking_id} by user {current_user_id}")
+                return {"error": "Unauthorized"}, 403
+                
+            # Mark all unread messages as read
+            ChatMessage.query.filter_by(
+                booking_id=booking_id,
+                is_read=False
+            ).filter(
+                ChatMessage.sender_id != current_user_id
+            ).update({"is_read": True})
+            
+            booking.has_unread_messages = False
+            db.session.commit()
+            logger.info(f"Successfully marked messages as read for booking {booking_id}")
+            
+            return {"message": "Messages marked as read"}, 200
+            
+        except Exception as e:
+            logger.error(f"Error marking messages as read: {str(e)}")
+            return {"error": "Error marking messages as read"}, 500
+
+# Register resources
+chat_api.add_resource(ChatResource, '/<int:booking_id>')
+chat_api.add_resource(ChatReadResource, '/<int:booking_id>/read')
+
 
 class NegotiationChatsResource(Resource):
     @jwt_required()
@@ -200,26 +235,36 @@ class UnreadChatsResource(Resource):
     @jwt_required()
     def get(self):
         """Get count of unread chat messages for the current user"""
-        current_user_id = get_jwt_identity()
-        
-        # Check if user is admin or client
-        is_admin_user = is_admin(current_user_id)
-        
-        if is_admin_user:
-            # For admins, count all unread messages across all bookings
-            unread_count = ChatMessage.query.filter_by(
-                is_read=False
-            ).filter(
-                ChatMessage.sender_type == 'client'
-            ).count()
-        else:
-            # For clients, count unread messages in their bookings
-            unread_count = ChatMessage.query.join(
-                Booking, ChatMessage.booking_id == Booking.id
-            ).filter(
-                Booking.client_id == current_user_id,
-                ChatMessage.is_read == False,
-                ChatMessage.sender_type == 'admin'
-            ).count()
-        
-        return jsonify({"count": unread_count}) 
+        try:
+            current_user_id = get_jwt_identity()
+            logger.info(f"Getting unread count for user {current_user_id}")
+            
+            # Check if user is admin or client
+            is_admin_user = is_admin(current_user_id)
+            logger.info(f"User {current_user_id} is_admin: {is_admin_user}")
+            
+            if is_admin_user:
+                # For admins, count all unread messages across all bookings
+                unread_count = ChatMessage.query.filter_by(
+                    is_read=False
+                ).filter(
+                    ChatMessage.sender_type == 'client'
+                ).count()
+            else:
+                # For clients, count unread messages in their bookings
+                # Convert string ID to int for database query
+                client_id = int(current_user_id)
+                unread_count = ChatMessage.query.join(
+                    Booking, ChatMessage.booking_id == Booking.id
+                ).filter(
+                    Booking.client_id == client_id,
+                    ChatMessage.is_read == False,
+                    ChatMessage.sender_type == 'admin'
+                ).count()
+            
+            logger.info(f"Found {unread_count} unread messages for user {current_user_id}")
+            return jsonify({"count": unread_count})
+            
+        except Exception as e:
+            logger.error(f"Error getting unread count: {str(e)}")
+            return jsonify({"error": "Error getting unread count"}), 500 

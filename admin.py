@@ -1,37 +1,23 @@
 from flask import Blueprint, jsonify
 from flask_restful import Api, Resource, reqparse
-from models import Admin, db
-from flask_bcrypt import Bcrypt
 from flask_jwt_extended import (
-    jwt_required, create_access_token, current_user, get_jwt_identity
+    jwt_required, create_access_token,
+    create_refresh_token, get_jwt_identity
 )
+from datetime import timedelta
 from admin_decorator import superadmin_required, admin_required
 from firebase_notification import generate_fcm_token
-from auth import jwt  # Import the JWT manager from auth.py
+from extensions import jwt, bcrypt, db
+from models import Admin
 
 admin_auth_bp = Blueprint('admin_auth_bp', __name__, url_prefix='/admin')
 admin_api = Api(admin_auth_bp)
-bcrypt = Bcrypt()
 
-@jwt.user_lookup_loader
-def admin_lookup_callback(_jwt_header, jwt_data):
-    identity = jwt_data["sub"]
-    try:
-        # Convert identity to integer if it's a string
-        admin_id = int(identity) if isinstance(identity, str) else identity
-        return Admin.query.get(admin_id)
-    except (ValueError, TypeError):
-        return None
+# JWT callbacks are now handled in auth.py
 
-@jwt.user_identity_loader
-def admin_identity_callback(admin):
-    if admin:
-        return str(admin.id)
-    return None
-
-admin_login_args = reqparse.RequestParser()
-admin_login_args.add_argument('email', type=str, required=True, help='Email is required')
-admin_login_args.add_argument('password', type=str, required=True, help='Password is required')
+login_args = reqparse.RequestParser()
+login_args.add_argument('email', type=str, required=True, help='Email is required')
+login_args.add_argument('password', type=str, required=True, help='Password is required')
 
 admin_register_args = reqparse.RequestParser()
 admin_register_args.add_argument('name', type=str, required=True, help='Name is required')
@@ -42,23 +28,32 @@ admin_register_args.add_argument('is_superadmin', type=bool, default=False)
 
 class AdminLogin(Resource):
     def post(self):
-        data = admin_login_args.parse_args()
+        data = login_args.parse_args()
+        
         admin = Admin.query.filter_by(email=data["email"]).first()
-
+        
         if not admin or not bcrypt.check_password_hash(admin.password, data["password"]):
-            return {"message": "Invalid credentials"}, 401
+            return {"message": "Invalid email or password"}, 401
+        
+        # Generate new FCM token
+        admin.fcm_token = generate_fcm_token()
+        db.session.commit()
+        
+        access_token = create_access_token(
+            identity=admin,
+            expires_delta=timedelta(days=30)
+        )
+        refresh_token = create_refresh_token(
+            identity=admin,
+            expires_delta=timedelta(days=90)
+        )
 
-        # Generate new FCM token if admin doesn't have one
-        if not admin.fcm_token:
-            admin.fcm_token = generate_fcm_token()
-            db.session.commit()
-
-        access_token = create_access_token(identity=str(admin.id))
         return {
             "access_token": access_token,
+            "refresh_token": refresh_token,
             "admin_id": admin.id,
-            "is_superadmin": admin.is_superadmin,
             "fcm_token": admin.fcm_token,
+            "is_superadmin": admin.is_superadmin,
             "name": admin.name
         }, 200
 

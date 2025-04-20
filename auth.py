@@ -1,37 +1,55 @@
 from datetime import timedelta
-from flask_jwt_extended import JWTManager, jwt_required, create_access_token, create_refresh_token, current_user
-from flask import Blueprint
-from flask_restful import Api, Resource, reqparse
-from models import Client, db
-from flask_bcrypt import Bcrypt
-from flask_jwt_extended import decode_token
+from flask_jwt_extended import (
+    jwt_required, create_access_token, create_refresh_token,
+    current_user, get_jwt_identity, decode_token, verify_jwt_in_request
+)
+from flask import Blueprint, request
+from flask_restful import Resource, Api, reqparse
+from models import Client, Admin
+from extensions import jwt, bcrypt, db, logger
 from firebase_notification import generate_fcm_token
 
 auth_bp = Blueprint('auth_bp', __name__, url_prefix='/auth')
 auth_api = Api(auth_bp)
-bcrypt = Bcrypt()
-
-jwt = JWTManager()
 
 # Extended token expiration times
 ACCESS_EXPIRES = timedelta(days=30)  # Access token now lasts 30 days
 REFRESH_EXPIRES = timedelta(days=90)  # Refresh token now lasts 90 days
 
-@jwt.user_lookup_loader
-def user_lookup_callback(_jwt_header, jwt_data):
-    identity = jwt_data["sub"]
-    try:
-        # Convert identity to integer if it's a string
-        user_id = int(identity) if isinstance(identity, str) else identity
-        return Client.query.get(user_id)
-    except (ValueError, TypeError):
+def init_jwt(app):
+    """Initialize JWT loaders for both client and admin authentication"""
+    
+    @jwt.user_lookup_loader
+    def user_lookup_callback(_jwt_header, jwt_data):
+        identity = jwt_data["sub"]
+        try:
+            # First try to find a client
+            user = Client.query.get(identity)
+            if user:
+                return user
+                
+            # If not found, try to find an admin
+            admin = Admin.query.get(identity)
+            if admin:
+                return admin
+                
+            return None
+        except (ValueError, TypeError):
+            logger.error(f"Invalid user_id format: {identity}")
+            return None
+    
+    @jwt.user_identity_loader
+    def user_identity_callback(user):
+        # If user is already an ID, return it as is
+        if isinstance(user, (int, str)):
+            return user
+            
+        # If user is a model instance, return its ID
+        if isinstance(user, (Client, Admin)):
+            return user.id
+            
+        # Default case
         return None
-
-@jwt.user_identity_loader
-def user_identity_callback(user):
-    if user:
-        return str(user.id)
-    return None
 
 register_args = reqparse.RequestParser()
 register_args.add_argument('name', type=str, required=True, help='Name is required')
@@ -85,16 +103,31 @@ class Login(Resource):
         if not user or not bcrypt.check_password_hash(user.password, data["password"]):
             return {"message": "Invalid email or password"}, 401
         
-        # Generate new FCM token if user doesn't have one
-        if not user.fcm_token:
-            user.fcm_token = generate_fcm_token()
-            db.session.commit()
+        # Clear any existing FCM token
+        user.fcm_token = None
         
-        access_token = create_access_token(identity=str(user.id))
-        refresh_token = create_refresh_token(identity=str(user.id))
-
-        jwt.access_token_expires = ACCESS_EXPIRES
-        jwt.refresh_token_expires = REFRESH_EXPIRES
+        # Generate new FCM token
+        user.fcm_token = generate_fcm_token()
+        db.session.commit()
+        
+        # Create tokens
+        access_token = create_access_token(
+            identity=str(user.id),  # Convert to string here
+            expires_delta=ACCESS_EXPIRES,
+            additional_claims={
+                'role': 'user',
+                'email': user.email
+            }
+        )
+        refresh_token = create_refresh_token(
+            identity=str(user.id),  # Convert to string here
+            expires_delta=REFRESH_EXPIRES
+        )
+        
+        logger.info(f"Created tokens for user {user.id}")
+        
+        # Log token creation
+        logger.info(f"Created access token for user {user.id}")
         
         return {
             "access_token": access_token,
@@ -114,5 +147,27 @@ class Login(Resource):
             "fcm_token": current_user.fcm_token
         }, 200
 
+class Logout(Resource):
+    @jwt_required()
+    def post(self):
+        try:
+            verify_jwt_in_request()
+            user_id = get_jwt_identity()
+            
+            # Try to find user in both Client and Admin tables
+            user = Client.query.get(user_id)
+            if not user:
+                user = Admin.query.get(user_id)
+            
+            if user:
+                user.fcm_token = None
+                db.session.commit()
+                
+            return {"message": "Successfully logged out"}, 200
+        except Exception as e:
+            logger.error(f"Error during logout: {str(e)}")
+            return {"message": "Error during logout"}, 422
+
 auth_api.add_resource(Signup, '/signup')
 auth_api.add_resource(Login, '/login')
+auth_api.add_resource(Logout, '/logout')

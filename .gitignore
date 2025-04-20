@@ -21,13 +21,13 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
-env/
-ENV/
-.env
-.venv
-env.bak/
-venv.bak/
+# venv/
+# env/
+# ENV/
+# .env
+# .venv
+# env.bak/
+# venv.bak/
 
 # IDE specific files
 .idea/
