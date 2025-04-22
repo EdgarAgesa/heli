@@ -188,7 +188,7 @@ class ForgotPassword(Resource):
 
         serializer = get_serializer()
         token = serializer.dumps({"email": user.email, "type": user_type}, salt="password-reset-salt")
-        frontend_url = "http://localhost:8081"  # <-- your frontend base URL
+        frontend_url = "https://dejair-skyline-rentals.vercel.app"  # <-- your frontend base URL
         reset_url = f"{frontend_url}/reset-password?token={token}"
         send_password_reset_email(user.email, reset_url)
         return {"message": "If the email exists, a reset link will be sent."}, 200
