@@ -205,6 +205,99 @@ The DejAir Helicopter Booking System is a comprehensive Flask-based backend syst
    Authorization: Bearer <token>
    ```
 
+## Booking Negotiation and Payment Process
+
+This section describes the step-by-step process for negotiating a booking price and completing payment.
+
+---
+
+### 1. Client Initiates Negotiation
+
+**Endpoint:**  
+`PUT /booking/<booking_id>`
+
+**Request Body:**
+```json
+{
+  "negotiation_request": true,
+  "negotiated_amount": 9000,
+  "notes": "Can you offer a discount for early booking?"
+}
+```
+
+---
+
+### 2. Admin Responds to Negotiation
+
+**Endpoint:**  
+`PUT /booking/<booking_id>`
+
+**Accept Negotiation:**
+```json
+{
+  "negotiation_action": "accept",
+  "final_amount": 9000,
+  "notes": "Discount approved."
+}
+```
+
+**Reject Negotiation:**
+```json
+{
+  "negotiation_action": "reject",
+  "final_amount": 9000,
+  "notes": "Sorry, we cannot offer a discount."
+}
+```
+
+**Counter Offer:**
+```json
+{
+  "negotiation_action": "counter",
+  "final_amount": 9500,
+  "notes": "We can offer 9500 as the best price."
+}
+```
+
+---
+
+### 3. Client Counter-Offers (if admin countered)
+
+**Endpoint:**  
+`PUT /booking/<booking_id>`
+
+**Request Body:**
+```json
+{
+  "counter_offer": 8800,
+  "notes": "Can you do 8800?"
+}
+```
+
+---
+
+### 4. Client Pays After Negotiation is Accepted
+
+**Endpoint:**  
+`PUT /booking/<booking_id>`
+
+**Request Body:**
+```json
+{
+  "payment": true,
+  "phone_number": "0791354042"
+}
+```
+
+---
+
+**Notes:**
+- Replace `<booking_id>` with your actual booking ID.
+- Use the correct JWT token for client or admin as needed.
+- After payment, a receipt email will be sent to the client (if email is configured).
+
+---
+
 ## Setup and Installation
 
 1. **Clone Repository**

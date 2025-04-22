@@ -81,25 +81,29 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER')
 app.config['MAIL_MAX_EMAILS'] = None
 app.config['MAIL_ASCII_ATTACHMENTS'] = False
 
-# Import and initialize extensions
-from extensions import db, jwt, mail
-
-# Initialize extensions
+# Initialize Flask-SQLAlchemy first
 db.init_app(app)
-bcrypt.init_app(app)
-mail.init_app(app)
-jwt.init_app(app)
 
-# Initialize JWT loaders
-from auth import init_jwt
-init_jwt(app)
-
-# Initialize Firebase
-from firebase_notification import initialize_firebase
-initialize_firebase(app)
-
-# Initialize migrations
-migrate = Migrate(app, db)
+# Create all database tables
+with app.app_context():
+    # Import models here, after db is initialized but before Migrate
+    from models import Admin, Client, Booking, Payment, Helicopter, ChatMessage, NegotiationHistory
+    
+    # Initialize migrations
+    migrate = Migrate(app, db)
+    
+    # Initialize other extensions
+    bcrypt.init_app(app)
+    mail.init_app(app)
+    jwt.init_app(app)
+    
+    # Initialize JWT loaders
+    from auth import init_jwt
+    init_jwt(app)
+    
+    # Initialize Firebase
+    from firebase_notification import initialize_firebase
+    initialize_firebase(app)
 
 # Create API instance
 api = Api(app)

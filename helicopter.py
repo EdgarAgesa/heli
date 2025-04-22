@@ -2,7 +2,7 @@ from models import Helicopter, db
 from flask_restful import Resource
 from flask import make_response, request, jsonify
 from flask_jwt_extended import jwt_required
-from admin_decorator import superadmin_required, admin_required
+from admin_decorator import superadmin_required, admin_required, admin_or_superadmin_required
 
 class HelicopterResource(Resource):
     @jwt_required()
@@ -17,8 +17,7 @@ class HelicopterResource(Resource):
             return make_response(jsonify(helicopter.to_dict()), 200)
 
     @jwt_required()
-    @superadmin_required
-    @admin_required
+    @admin_or_superadmin_required
     def post(self):
         data = request.get_json()
 
@@ -32,13 +31,14 @@ class HelicopterResource(Resource):
         )
 
         db.session.add(new_helicopter)
+        print("Added helicopter to session:", new_helicopter)  # <-- Add this
         db.session.commit()
+        print("Committed helicopter to DB")  # <-- Add this
 
         return make_response(jsonify(new_helicopter.to_dict()), 201)
 
     @jwt_required()
-    @superadmin_required
-    @admin_required
+    @admin_or_superadmin_required
     def put(self, id):
         try:
             up_helicopter = Helicopter.query.get(id)
@@ -62,8 +62,7 @@ class HelicopterResource(Resource):
             return jsonify({"message": "An error occurred", "error": str(e)}, 500)
 
     @jwt_required()
-    @superadmin_required
-    @admin_required
+    @admin_or_superadmin_required
     def delete(self, id):
         try:
             delete_helicopter = Helicopter.query.filter_by(id=id).first()

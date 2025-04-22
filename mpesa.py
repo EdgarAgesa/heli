@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 30  # seconds
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
-MAX_VERIFICATION_ATTEMPTS = 24  # Try for up to 2 minutes (24*5s)
+MAX_VERIFICATION_ATTEMPTS = 15  # Try for up to 2 minutes (24*5s)
 VERIFICATION_RETRY_DELAY = 5    # seconds
 
 # M-Pesa credentials

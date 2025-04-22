@@ -30,3 +30,14 @@ def superadmin_required(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+def admin_or_superadmin_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def wrapper(*args, **kwargs):
+        current_user_id = get_jwt_identity()
+        admin = Admin.query.get(current_user_id)
+        if not admin:
+            return jsonify({"msg": "Admin or superadmin privileges required."}), 403
+        return fn(*args, **kwargs)
+    return wrapper

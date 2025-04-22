@@ -1,9 +1,9 @@
 from flask_restful import Resource, reqparse, Api
 from flask import Blueprint
 from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import check_password_hash
 from models import Admin
-from extensions import db, logger
+from extensions import db, logger, bcrypt
 from firebase_notification import generate_fcm_token
 from datetime import timedelta
 
@@ -32,8 +32,8 @@ class AdminSignup(Resource):
         if Admin.query.filter_by(email=data['email']).first():
             return {"message": "Email already exists"}, 400
         
-        # Hash the password using pbkdf2:sha256
-        hashed_password = generate_password_hash(data["password"], method='pbkdf2:sha256')
+        # Hash the password using bcrypt
+        hashed_password = bcrypt.generate_password_hash(data["password"]).decode('utf-8')
         
         # Generate FCM token automatically
         fcm_token = generate_fcm_token()
@@ -62,17 +62,19 @@ class AdminLogin(Resource):
 
         data = login_args.parse_args()
         
+        print("Admin login attempt:", data["email"])
         admin = Admin.query.filter_by(email=data["email"]).first()
-        
-        if not admin or not check_password_hash(admin.password, data["password"]):
+        print("Admin found:", admin)
+
+        # Use the check_password method from the Admin model
+        if not admin or not admin.check_password(data["password"]):
             return {"message": "Invalid email or password"}, 401
         
-        # Generate new FCM token if admin doesn't have one
+        # Generate new FCM token if needed
         if not admin.fcm_token:
             admin.fcm_token = generate_fcm_token()
             db.session.commit()
         
-        # Create tokens with proper claims
         access_token = create_access_token(
             identity=str(admin.id),
             expires_delta=ACCESS_EXPIRES,

@@ -3,8 +3,9 @@ from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_serializer import SerializerMixin
 from datetime import time, date
+from extensions import bcrypt, db
 
-db = SQLAlchemy()
+# db = SQLAlchemy()
 
 class BaseModel(db.Model, SerializerMixin):
     __abstract__ = True
@@ -39,10 +40,10 @@ class Client(BaseModel):
     bookings = db.relationship('Booking', backref='client', lazy=True, cascade="all, delete-orphan")
 
     def set_password(self, password):
-        self.password = generate_password_hash(password)
+        self.password = bcrypt.generate_password_hash(password).decode('utf-8')
 
     def check_password(self, password):
-        return check_password_hash(self.password, password)
+        return bcrypt.check_password_hash(self.password, password)
 
 class Admin(BaseModel):
     __tablename__ = "admins"
@@ -50,15 +51,20 @@ class Admin(BaseModel):
     name = db.Column(db.String(60), nullable=False)
     phone_number = db.Column(db.String(14), unique=True, nullable=False)
     email = db.Column(db.String(90), unique=True, nullable=True)
-    password = db.Column(db.String(128), nullable=False)
+    password = db.Column(db.String(128), nullable=False)  # Use this directly
     is_superadmin = db.Column(db.Boolean, default=False)
     fcm_token = db.Column(db.String(255))  # Firebase Cloud Messaging token
 
     def set_password(self, password):
-        self.password = generate_password_hash(password)
+        """Hash and set the password"""
+        self.password = bcrypt.generate_password_hash(password).decode('utf-8')
 
     def check_password(self, password):
-        return check_password_hash(self.password, password)
+        """Check if the password matches"""
+        return bcrypt.check_password_hash(self.password, password)
+
+    def __repr__(self):
+        return f"Admin (id={self.id})"
 
 class Helicopter(BaseModel):
     __tablename__ = "helicopters"
@@ -102,12 +108,19 @@ class Payment(BaseModel):
 class ChatMessage(BaseModel):
     __tablename__ = "chat_messages"
 
-    booking_id = db.Column(db.Integer, db.ForeignKey('bookings.id'), nullable=False)
+    booking_id = db.Column(
+        db.Integer,
+        db.ForeignKey('bookings.id', ondelete="CASCADE"),  # <-- Add ondelete
+        nullable=False
+    )
     sender_id = db.Column(db.Integer, nullable=False)  # ID of user who sent the message
     sender_type = db.Column(db.String, nullable=False)  # 'client' or 'admin'
     message = db.Column(db.Text, nullable=False)
     is_read = db.Column(db.Boolean, default=False)
-    booking = db.relationship('Booking', backref='chat_messages', lazy=True)
+    booking = db.relationship(
+        'Booking',
+        back_populates='chat_messages'
+    )
 
     def to_dict(self):
         return {
@@ -136,6 +149,12 @@ class Booking(BaseModel):
     payment_id = db.Column(db.Integer, db.ForeignKey('payments.id', ondelete="CASCADE"), nullable=True)
     has_unread_messages = db.Column(db.Boolean, default=False)  # Track unread messages
     last_message_at = db.Column(db.DateTime)  # Track last message timestamp
+    chat_messages = db.relationship(
+        'ChatMessage',
+        back_populates='booking',
+        lazy=True,
+        cascade="all, delete-orphan"
+    )
 
     def as_dict(self):
         return {

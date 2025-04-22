@@ -54,3 +54,14 @@ def send_booking_confirmation_email(booking, client):
     except Exception as e:
         current_app.logger.error(f"Failed to send booking confirmation email: {str(e)}")
         return False
+
+def send_password_reset_email(email, reset_url):
+    from flask_mail import Message
+    from flask import current_app
+    msg = Message(
+        subject="Password Reset Request",
+        recipients=[email],
+        body=f"Click the link to reset your password: {reset_url}"
+    )
+    mail = current_app.extensions.get('mail')
+    mail.send(msg)

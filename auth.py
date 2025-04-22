@@ -3,11 +3,13 @@ from flask_jwt_extended import (
     jwt_required, create_access_token, create_refresh_token,
     current_user, get_jwt_identity, decode_token, verify_jwt_in_request
 )
-from flask import Blueprint, request
+from flask import Blueprint, request, url_for, current_app
 from flask_restful import Resource, Api, reqparse
+from itsdangerous import URLSafeTimedSerializer
 from models import Client, Admin
 from extensions import jwt, bcrypt, db, logger
 from firebase_notification import generate_fcm_token
+from email_utils import send_password_reset_email  # You need to implement this
 
 auth_bp = Blueprint('auth_bp', __name__, url_prefix='/auth')
 auth_api = Api(auth_bp)
@@ -168,6 +170,63 @@ class Logout(Resource):
             logger.error(f"Error during logout: {str(e)}")
             return {"message": "Error during logout"}, 422
 
+# Serializer for generating tokens
+def get_serializer():
+    return URLSafeTimedSerializer(current_app.config["JWT_SECRET_KEY"])
+
+class ForgotPassword(Resource):
+    def post(self):
+        data = request.get_json()
+        email = data.get("email")
+        user = Client.query.filter_by(email=email).first()
+        user_type = "client"
+        if not user:
+            user = Admin.query.filter_by(email=email).first()
+            user_type = "admin"
+        if not user:
+            return {"message": "If the email exists, a reset link will be sent."}, 200
+
+        serializer = get_serializer()
+        token = serializer.dumps({"email": user.email, "type": user_type}, salt="password-reset-salt")
+        frontend_url = "http://localhost:8080"  # <-- your frontend base URL
+        reset_url = f"{frontend_url}/reset-password?token={token}"
+        send_password_reset_email(user.email, reset_url)
+        return {"message": "If the email exists, a reset link will be sent."}, 200
+
+class ResetPassword(Resource):
+    def post(self):
+        data = request.get_json()
+        token = data.get("token")
+        new_password = data.get("new_password")
+        confirm_password = data.get("confirm_password")
+        if new_password != confirm_password:
+            return {"message": "Passwords do not match."}, 400
+
+        serializer = get_serializer()
+        try:
+            data_token = serializer.loads(token, salt="password-reset-salt", max_age=3600)
+            email = data_token["email"]
+            user_type = data_token.get("type", "client")
+
+            if user_type == "client":
+                user = Client.query.filter_by(email=email).first()
+            else:
+                user = Admin.query.filter_by(email=email).first()
+
+            if not user:
+                return {"message": "User not found."}, 404
+
+            # Use the model's set_password method
+            user.set_password(new_password)
+            db.session.commit()
+
+            return {"message": "Password reset successful."}, 200
+        except Exception as e:
+            logger.error(f"Password reset error: {str(e)}")
+            return {"message": "Invalid or expired token."}, 400
+
 auth_api.add_resource(Signup, '/signup')
 auth_api.add_resource(Login, '/login')
 auth_api.add_resource(Logout, '/logout')
+auth_api.add_resource(ForgotPassword, '/forgot-password')
+auth_api.add_resource(ResetPassword, '/reset-password', endpoint='resetpassword')

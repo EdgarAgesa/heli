@@ -1,8 +1,8 @@
-"""empty message
+"""initial migration
 
-Revision ID: 07e9713177e2
+Revision ID: 4048379fcf06
 Revises: 
-Create Date: 2025-04-08 13:04:35.834460
+Create Date: 2025-04-22 16:01:26.918737
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '07e9713177e2'
+revision = '4048379fcf06'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -97,7 +97,7 @@ def upgrade():
     sa.Column('sender_type', sa.String(), nullable=False),
     sa.Column('message', sa.Text(), nullable=False),
     sa.Column('is_read', sa.Boolean(), nullable=True),
-    sa.ForeignKeyConstraint(['booking_id'], ['bookings.id'], ),
+    sa.ForeignKeyConstraint(['booking_id'], ['bookings.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('negotiation_history',
